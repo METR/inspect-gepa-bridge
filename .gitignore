@@ -298,4 +298,3 @@ $RECYCLE.BIN/
 .matplotlib_cache/
 *.code-workspace
 /logs
-dvc_plots
