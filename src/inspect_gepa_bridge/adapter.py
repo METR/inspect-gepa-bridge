@@ -6,6 +6,8 @@ integrating Inspect AI tasks with GEPA optimization. Task-specific adapters
 should extend this class and implement the abstract methods.
 """
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from typing import Any, Generic, TypeVar
@@ -16,6 +18,8 @@ import inspect_ai.model
 import inspect_ai.scorer
 import inspect_ai.solver
 from gepa.core.adapter import EvaluationBatch
+
+logger = logging.getLogger(__name__)
 
 # Generic type variables for task-specific types
 DataInst = TypeVar("DataInst")
@@ -141,11 +145,16 @@ class InspectGEPAAdapter(ABC, Generic[DataInst, Trajectory, RolloutOutput]):
 
         This is the main entry point called by GEPA.
         """
+        eval_start = time.time()
+        logger.info(f"[GEPA] Starting evaluation of {len(batch)} samples")
+
         system_prompt = candidate.get("system_prompt", "")
 
         # Convert instances to Inspect samples
+        t0 = time.time()
         samples = [self.inst_to_sample(inst) for inst in batch]
         dataset = inspect_ai.dataset.MemoryDataset(samples)
+        logger.debug(f"[GEPA] Sample conversion took {time.time() - t0:.2f}s")
 
         # Build solver chain
         solvers: list[inspect_ai.solver.Solver] = [
@@ -162,7 +171,9 @@ class InspectGEPAAdapter(ABC, Generic[DataInst, Trajectory, RolloutOutput]):
         )
 
         # Set up eval kwargs
+        t0 = time.time()
         model = inspect_ai.model.get_model(self.agent_model)
+        logger.info(f"[GEPA] Using model: {self.agent_model}")
         eval_kwargs: dict[str, Any] = {"model": model}
 
         if self.log_dir:
@@ -174,11 +185,30 @@ class InspectGEPAAdapter(ABC, Generic[DataInst, Trajectory, RolloutOutput]):
                 role: inspect_ai.model.get_model(model_id)
                 for role, model_id in self.model_roles.items()
             }
+            logger.debug(f"[GEPA] Model roles: {list(self.model_roles.keys())}")
+
+        logger.debug(f"[GEPA] Model setup took {time.time() - t0:.2f}s")
 
         # Run evaluation
+        logger.info(
+            f"[GEPA] Running inspect_ai.eval() with sandbox={self.sandbox_type}..."
+        )
+        t0 = time.time()
         results = inspect_ai.eval(task, **eval_kwargs)
+        inspect_time = time.time() - t0
+        logger.info(f"[GEPA] inspect_ai.eval() completed in {inspect_time:.2f}s")
 
-        return self._process_results(results, batch, capture_traces)
+        # Process results
+        t0 = time.time()
+        processed = self._process_results(results, batch, capture_traces)
+        logger.debug(f"[GEPA] Result processing took {time.time() - t0:.2f}s")
+
+        total_time = time.time() - eval_start
+        logger.info(
+            f"[GEPA] Total evaluation time: {total_time:.2f}s for {len(batch)} samples ({total_time / len(batch):.2f}s/sample)"
+        )
+
+        return processed
 
     def _process_results(
         self,
