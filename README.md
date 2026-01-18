@@ -4,12 +4,7 @@ Generic bridge for integrating [Inspect AI](https://inspect.ai-safety-institute.
 
 ## Overview
 
-This package provides utilities and base classes for creating GEPA adapters that use Inspect AI for evaluation. It handles the common patterns:
-
-- Converting task-specific data instances to Inspect samples
-- Running Inspect evaluations programmatically
-- Processing scorer results into GEPA's EvaluationBatch format
-- Utilities for building reflective datasets
+This package provides utilities for wrapping existing Inspect AI tasks for GEPA optimization. The primary API is `TaskAdapter`, which takes an existing Inspect Task and makes it compatible with GEPA's optimization interface.
 
 ## Installation
 
@@ -23,71 +18,108 @@ Or with uv:
 uv add inspect-gepa-bridge
 ```
 
-## Usage
+## Quick Start
 
-Create a task-specific adapter by extending `InspectGEPAAdapter`:
+Wrap an existing Inspect Task with `TaskAdapter`:
 
 ```python
-from dataclasses import dataclass
-from inspect_gepa_bridge import InspectGEPAAdapter, DataInstBase
-import inspect_ai.dataset
-import inspect_ai.scorer
-import inspect_ai.solver
+from inspect_ai import Task
+from inspect_ai.dataset import hf_dataset
+from inspect_ai.solver import generate
+from inspect_ai.scorer import model_graded_fact
 
-@dataclass
-class MyDataInst(DataInstBase):
-    question: str
-    expected_answer: str
+from inspect_gepa_bridge import TaskAdapter
 
-@dataclass
-class MyTrajectory:
-    sample_id: int | str
-    completion: str
-    score: float
-    feedback: str
+# Your existing Inspect task
+task = Task(
+    dataset=hf_dataset("gsm8k", split="train[:100]"),
+    solver=generate(),
+    scorer=model_graded_fact(),
+)
 
-@dataclass
-class MyRolloutOutput:
-    completion: str
-    score: inspect_ai.scorer.Score | None
+# Wrap for GEPA - that's it!
+adapter = TaskAdapter(task=task, model="anthropic/claude-sonnet-4-20250514")
 
-class MyGEPAAdapter(InspectGEPAAdapter[MyDataInst, MyTrajectory, MyRolloutOutput]):
-    def inst_to_sample(self, inst: MyDataInst) -> inspect_ai.dataset.Sample:
-        return inspect_ai.dataset.Sample(
-            input=inst.question,
-            id=inst.sample_id,
-            target=inst.expected_answer,
-        )
+# Get sample IDs for GEPA to sample from
+dataset = adapter.get_sample_ids()
 
-    def get_scorers(self) -> list[inspect_ai.scorer.Scorer]:
-        return [inspect_ai.scorer.match()]
-
-    def get_solver_steps(self, candidate: dict[str, str]) -> list[inspect_ai.solver.Solver]:
-        return [inspect_ai.solver.generate()]
-
-    # ... implement remaining abstract methods
+# Evaluate a batch of samples with a candidate prompt
+result = adapter.evaluate(
+    batch=dataset[:10],
+    candidate={"system_prompt": "You are a helpful math tutor."},
+    capture_traces=True,
+)
 ```
 
 ## Components
 
-### `InspectGEPAAdapter`
+### `TaskAdapter`
 
-Abstract base class that handles the common evaluation pattern. Subclasses implement task-specific logic.
+The primary adapter class that wraps an existing Inspect Task. It:
+- Builds a sample index from the task's dataset
+- Prepends a system_message solver with the candidate's system prompt
+- Runs evaluation using Inspect AI
+- Returns results in GEPA's EvaluationBatch format
 
-### `InspectSampleConverter`
+```python
+adapter = TaskAdapter(
+    task=my_task,
+    model="anthropic/claude-sonnet-4-20250514",
+    score_aggregator=my_aggregator,  # Optional: custom score aggregation
+    feedback_generator=my_feedback,  # Optional: custom feedback generation
+    log_dir="/path/to/logs",         # Optional: Inspect log directory
+    model_roles={"grader": "..."},   # Optional: model roles for scoring
+)
+```
 
-Abstract converter for transforming Inspect Samples to task-specific data instances.
+### Types
 
-### `load_inspect_dataset`
-
-Utility function for loading Inspect datasets and converting them to task-specific formats.
+- `InspectTrajectory`: Full trajectory data including input, output, messages, and scores
+- `InspectOutput`: Simple output container with completion and scores
+- `ScoreAggregator`: Protocol for aggregating multiple scores to a single float
+- `FeedbackGenerator`: Protocol for generating feedback strings
 
 ### Scoring Utilities
 
-- `ScorerResult`: Container for scorer results with convenient accessors
+- `first_scorer_as_float`: Default score aggregator (uses first scorer)
+- `default_feedback_generator`: Default feedback generator
 - `score_to_float`: Convert Inspect Score to float value
-- `extract_scores_from_sample`: Extract specific scorer results from evaluation
-- `get_completion_from_sample`: Extract completion text from sample results
+- `ScorerResult`: Container for scorer results with convenient accessors
+
+## Advanced Usage
+
+### Custom Score Aggregation
+
+```python
+def my_aggregator(scores: dict[str, Score]) -> float:
+    # Weight different scorers
+    if "accuracy" in scores and "style" in scores:
+        return 0.8 * score_to_float(scores["accuracy"]) + 0.2 * score_to_float(scores["style"])
+    return first_scorer_as_float(scores)
+
+adapter = TaskAdapter(task=task, model=model, score_aggregator=my_aggregator)
+```
+
+### Custom Feedback Generation
+
+```python
+def my_feedback(input_text, completion, target, scores, score) -> str:
+    return f"Score: {score:.2f}\nExpected: {target}\nGot: {completion}"
+
+adapter = TaskAdapter(task=task, model=model, feedback_generator=my_feedback)
+```
+
+## Legacy API
+
+For users migrating from the abstract base class pattern, `InspectGEPAAdapter` is still available:
+
+```python
+from inspect_gepa_bridge import InspectGEPAAdapter, DataInstBase
+
+class MyAdapter(InspectGEPAAdapter[MyDataInst, MyTrajectory, MyOutput]):
+    # Implement abstract methods...
+    pass
+```
 
 ## License
 

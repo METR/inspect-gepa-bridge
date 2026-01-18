@@ -162,3 +162,69 @@ def get_completion_from_sample(sample: Any) -> str:
     if sample.output is None:
         return ""
     return sample.output.completion or ""
+
+
+def first_scorer_as_float(scores: dict[str, inspect_ai.scorer.Score]) -> float:
+    """
+    Default score aggregator: use the first scorer's result.
+
+    Args:
+        scores: Dict mapping scorer names to Score objects
+
+    Returns:
+        Float value from the first scorer, or 0.0 if no scores
+    """
+    if not scores:
+        return 0.0
+    return score_to_float(next(iter(scores.values())))
+
+
+def default_feedback_generator(
+    input_text: str,
+    completion: str,
+    target: str | list[str] | None,
+    scores: dict[str, inspect_ai.scorer.Score],
+    score: float,
+) -> str:
+    """
+    Generate a default feedback string for the reflective dataset.
+
+    Creates a simple feedback format showing the evaluation results
+    that can be used by GEPA for prompt refinement.
+
+    Args:
+        input_text: The input/question text
+        completion: The model's completion/answer
+        target: The expected target answer(s)
+        scores: Dict of scorer results
+        score: The aggregated score
+
+    Returns:
+        Formatted feedback string
+    """
+    # Format target
+    target_str = _format_target_for_feedback(target)
+
+    # Format scores
+    score_strs = [f"{name}: {s.value}" for name, s in scores.items()]
+    scores_str = ", ".join(score_strs) if score_strs else "N/A"
+
+    # Build feedback
+    parts = [
+        f"Input: {input_text[:500]}{'...' if len(input_text) > 500 else ''}",
+        f"Target: {target_str}",
+        f"Completion: {completion[:500]}{'...' if len(completion) > 500 else ''}",
+        f"Scores: {scores_str}",
+        f"Aggregated Score: {score:.3f}",
+    ]
+
+    return "\n".join(parts)
+
+
+def _format_target_for_feedback(target: str | list[str] | None) -> str:
+    """Format a target value for feedback display."""
+    if target is None:
+        return "N/A"
+    if isinstance(target, str):
+        return target
+    return ", ".join(target)
