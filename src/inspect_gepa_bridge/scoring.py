@@ -12,6 +12,8 @@ import inspect_ai
 import inspect_ai.model
 import inspect_ai.scorer
 
+from inspect_gepa_bridge.types import format_target
+
 
 @dataclass
 class ScorerResult:
@@ -91,30 +93,6 @@ def score_to_float(score: inspect_ai.scorer.Score | None) -> float:
     return 0.0
 
 
-def extract_scores_from_sample(
-    sample: Any,  # inspect_ai.log.EvalSample
-    scorer_names: list[str],
-) -> dict[str, ScorerResult]:
-    """
-    Extract scores for specific scorers from an Inspect sample result.
-
-    Args:
-        sample: The Inspect EvalSample from evaluation results
-        scorer_names: List of scorer names to extract
-
-    Returns:
-        Dict mapping scorer name to ScorerResult
-    """
-    sample_scores: dict[str, inspect_ai.scorer.Score] = sample.scores or {}
-    results: dict[str, ScorerResult] = {}
-
-    for name in scorer_names:
-        score: inspect_ai.scorer.Score | None = sample_scores.get(name)
-        results[name] = ScorerResult(score=score, scorer_name=name)
-
-    return results
-
-
 def run_inspect_eval(
     task: inspect_ai.Task,
     model: str | inspect_ai.model.Model,
@@ -162,3 +140,60 @@ def get_completion_from_sample(sample: Any) -> str:
     if sample.output is None:
         return ""
     return sample.output.completion or ""
+
+
+def first_scorer_as_float(scores: dict[str, inspect_ai.scorer.Score]) -> float:
+    """
+    Default score aggregator: use the first scorer's result.
+
+    Args:
+        scores: Dict mapping scorer names to Score objects
+
+    Returns:
+        Float value from the first scorer, or 0.0 if no scores
+    """
+    if not scores:
+        return 0.0
+    return score_to_float(next(iter(scores.values())))
+
+
+def default_feedback_generator(
+    input_text: str,
+    completion: str,
+    target: str | list[str] | None,
+    scores: dict[str, inspect_ai.scorer.Score],
+    score: float,
+) -> str:
+    """
+    Generate a default feedback string for the reflective dataset.
+
+    Creates a simple feedback format showing the evaluation results
+    that can be used by GEPA for prompt refinement.
+
+    Args:
+        input_text: The input/question text
+        completion: The model's completion/answer
+        target: The expected target answer(s)
+        scores: Dict of scorer results
+        score: The aggregated score
+
+    Returns:
+        Formatted feedback string
+    """
+    # Format target
+    target_str = format_target(target)
+
+    # Format scores
+    score_strs = [f"{name}: {s.value}" for name, s in scores.items()]
+    scores_str = ", ".join(score_strs) if score_strs else "N/A"
+
+    # Build feedback
+    parts = [
+        f"Input: {input_text[:500]}{'...' if len(input_text) > 500 else ''}",
+        f"Target: {target_str}",
+        f"Completion: {completion[:500]}{'...' if len(completion) > 500 else ''}",
+        f"Scores: {scores_str}",
+        f"Aggregated Score: {score:.3f}",
+    ]
+
+    return "\n".join(parts)
