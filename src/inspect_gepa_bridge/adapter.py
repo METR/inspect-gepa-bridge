@@ -190,7 +190,9 @@ class InspectGEPAAdapter(ABC, Generic[DataInst, Trajectory, RolloutOutput]):
         logger.debug(f"[GEPA] Model setup took {time.time() - t0:.2f}s")
 
         # Run evaluation
-        logger.info(f"[GEPA] Running inspect_ai.eval() with sandbox={self.sandbox_type}...")
+        logger.info(
+            f"[GEPA] Running inspect_ai.eval() with sandbox={self.sandbox_type}..."
+        )
         t0 = time.time()
         results = inspect_ai.eval(task, **eval_kwargs)
         inspect_time = time.time() - t0
@@ -202,7 +204,9 @@ class InspectGEPAAdapter(ABC, Generic[DataInst, Trajectory, RolloutOutput]):
         logger.debug(f"[GEPA] Result processing took {time.time() - t0:.2f}s")
 
         total_time = time.time() - eval_start
-        logger.info(f"[GEPA] Total evaluation time: {total_time:.2f}s for {len(batch)} samples ({total_time/len(batch):.2f}s/sample)")
+        logger.info(
+            f"[GEPA] Total evaluation time: {total_time:.2f}s for {len(batch)} samples ({total_time / len(batch):.2f}s/sample)"
+        )
 
         return processed
 
