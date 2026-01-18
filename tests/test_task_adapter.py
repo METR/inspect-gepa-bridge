@@ -209,9 +209,12 @@ def test_make_reflective_dataset() -> None:
 
     assert "system_prompt" in result
     assert len(result["system_prompt"]) == 1
-    assert result["system_prompt"][0]["input"] == "2+2=?"
+    # GEPA recommended schema keys
+    assert result["system_prompt"][0]["Inputs"] == "2+2=?"
+    assert result["system_prompt"][0]["Generated Outputs"] == "4"
+    assert result["system_prompt"][0]["Feedback"] == "Correct!"
+    # Additional keys
     assert result["system_prompt"][0]["target"] == "4"
-    assert result["system_prompt"][0]["completion"] == "4"
     assert result["system_prompt"][0]["score"] == 1.0
 
 

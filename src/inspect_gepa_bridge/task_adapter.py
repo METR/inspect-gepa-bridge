@@ -341,12 +341,14 @@ class TaskAdapter:
             )
             target_text = format_target(traj.target)
 
+            # Use GEPA's recommended schema (see gepa.core.adapter.GEPAAdapter)
             example: dict[str, Any] = {
-                "input": input_text,
+                "Inputs": input_text,
+                "Generated Outputs": traj.completion,
+                "Feedback": traj.feedback,
+                # Additional keys (allowed per GEPA docs)
                 "target": target_text,
-                "completion": traj.completion,
                 "score": traj.score,
-                "feedback": traj.feedback,
                 "scores": {k: str(v.value) for k, v in traj.scores.items()},
             }
             examples.append(example)
