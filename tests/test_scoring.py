@@ -1,7 +1,6 @@
 """Tests for scoring utilities."""
 
 import inspect_ai.scorer
-import pytest
 
 from inspect_gepa_bridge.scoring import ScorerResult, score_to_float
 

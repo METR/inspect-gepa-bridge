@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import inspect_ai
-import inspect_ai.dataset
 import inspect_ai.model
 import inspect_ai.scorer
 
@@ -47,7 +46,9 @@ class ScorerResult:
 
     def is_incorrect(self) -> bool:
         """Check if the score indicates incorrect answer."""
-        return self.score is not None and self.score.value == inspect_ai.scorer.INCORRECT
+        return (
+            self.score is not None and self.score.value == inspect_ai.scorer.INCORRECT
+        )
 
     def as_float(self) -> float:
         """Convert the score value to a float, returning 0.0 if not convertible."""
@@ -70,8 +71,6 @@ def score_to_float(score: inspect_ai.scorer.Score | None) -> float:
         return 0.0
 
     value = score.value
-    if value is None:
-        return 0.0
 
     # Handle special values
     if value == inspect_ai.scorer.CORRECT:
@@ -81,11 +80,15 @@ def score_to_float(score: inspect_ai.scorer.Score | None) -> float:
     if value == inspect_ai.scorer.NOANSWER:
         return 0.0
 
-    # Try to convert to float
-    try:
+    # Try to convert to float (value can be str, int, float, bool, Sequence, or Mapping)
+    if isinstance(value, (int, float)):
         return float(value)
-    except (ValueError, TypeError):
-        return 0.0
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 def extract_scores_from_sample(
@@ -102,11 +105,11 @@ def extract_scores_from_sample(
     Returns:
         Dict mapping scorer name to ScorerResult
     """
-    sample_scores = sample.scores or {}
+    sample_scores: dict[str, inspect_ai.scorer.Score] = sample.scores or {}
     results: dict[str, ScorerResult] = {}
 
     for name in scorer_names:
-        score = sample_scores.get(name)
+        score: inspect_ai.scorer.Score | None = sample_scores.get(name)
         results[name] = ScorerResult(score=score, scorer_name=name)
 
     return results
