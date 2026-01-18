@@ -109,18 +109,6 @@ def my_feedback(input_text, completion, target, scores, score) -> str:
 adapter = TaskAdapter(task=task, model=model, feedback_generator=my_feedback)
 ```
 
-## Legacy API
-
-For users migrating from the abstract base class pattern, `InspectGEPAAdapter` is still available:
-
-```python
-from inspect_gepa_bridge import InspectGEPAAdapter, DataInstBase
-
-class MyAdapter(InspectGEPAAdapter[MyDataInst, MyTrajectory, MyOutput]):
-    # Implement abstract methods...
-    pass
-```
-
 ## License
 
 MIT
