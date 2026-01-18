@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import inspect_ai
 import inspect_ai.dataset
+import inspect_ai.model
 import inspect_ai.scorer
 import inspect_ai.solver
 from gepa.core.adapter import EvaluationBatch
@@ -309,3 +310,23 @@ def test_format_input_string():
     result = adapter._format_input("test input")
 
     assert result == "test input"
+
+
+def test_format_input_chat_messages():
+    samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
+    dataset = inspect_ai.dataset.MemoryDataset(samples)
+    task = inspect_ai.Task(
+        dataset=dataset,
+        solver=inspect_ai.solver.generate(),
+        scorer=inspect_ai.scorer.match(),
+    )
+    adapter = TaskAdapter(task=task, model="test-model")
+
+    messages: list[inspect_ai.model.ChatMessage] = [
+        inspect_ai.model.ChatMessageUser(content="Hello"),
+        inspect_ai.model.ChatMessageAssistant(content="Hi there"),
+    ]
+
+    result = adapter._format_input(messages)
+
+    assert result == "Hello\nHi there"

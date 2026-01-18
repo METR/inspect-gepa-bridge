@@ -12,6 +12,8 @@ import inspect_ai
 import inspect_ai.model
 import inspect_ai.scorer
 
+from inspect_gepa_bridge.types import format_target
+
 
 @dataclass
 class ScorerResult:
@@ -89,30 +91,6 @@ def score_to_float(score: inspect_ai.scorer.Score | None) -> float:
         except ValueError:
             return 0.0
     return 0.0
-
-
-def extract_scores_from_sample(
-    sample: Any,  # inspect_ai.log.EvalSample
-    scorer_names: list[str],
-) -> dict[str, ScorerResult]:
-    """
-    Extract scores for specific scorers from an Inspect sample result.
-
-    Args:
-        sample: The Inspect EvalSample from evaluation results
-        scorer_names: List of scorer names to extract
-
-    Returns:
-        Dict mapping scorer name to ScorerResult
-    """
-    sample_scores: dict[str, inspect_ai.scorer.Score] = sample.scores or {}
-    results: dict[str, ScorerResult] = {}
-
-    for name in scorer_names:
-        score: inspect_ai.scorer.Score | None = sample_scores.get(name)
-        results[name] = ScorerResult(score=score, scorer_name=name)
-
-    return results
 
 
 def run_inspect_eval(
@@ -203,7 +181,7 @@ def default_feedback_generator(
         Formatted feedback string
     """
     # Format target
-    target_str = _format_target_for_feedback(target)
+    target_str = format_target(target)
 
     # Format scores
     score_strs = [f"{name}: {s.value}" for name, s in scores.items()]
@@ -219,12 +197,3 @@ def default_feedback_generator(
     ]
 
     return "\n".join(parts)
-
-
-def _format_target_for_feedback(target: str | list[str] | None) -> str:
-    """Format a target value for feedback display."""
-    if target is None:
-        return "N/A"
-    if isinstance(target, str):
-        return target
-    return ", ".join(target)

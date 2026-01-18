@@ -224,7 +224,7 @@ class TaskAdapter:
             # Create trajectory if capturing traces
             if trajectories is not None:
                 # Get target from original sample
-                target = original_sample.target or ""
+                target = original_sample.target
 
                 # Generate feedback
                 input_text = self._format_input(original_sample.input)

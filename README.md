@@ -91,6 +91,10 @@ adapter = TaskAdapter(
 ### Custom Score Aggregation
 
 ```python
+from inspect_ai.scorer import Score
+
+from inspect_gepa_bridge import TaskAdapter, first_scorer_as_float, score_to_float
+
 def my_aggregator(scores: dict[str, Score]) -> float:
     # Weight different scorers
     if "accuracy" in scores and "style" in scores:
