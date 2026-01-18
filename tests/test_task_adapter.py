@@ -6,6 +6,7 @@ import inspect_ai
 import inspect_ai.dataset
 import inspect_ai.scorer
 import inspect_ai.solver
+from gepa.core.adapter import EvaluationBatch
 
 from inspect_gepa_bridge import TaskAdapter
 from inspect_gepa_bridge.scoring import first_scorer_as_float
@@ -86,7 +87,7 @@ def test_create_eval_task_with_solver_list():
 
 
 @patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
-def test_evaluate_returns_empty_batch_for_missing_samples(mock_eval):
+def test_evaluate_returns_empty_batch_for_missing_samples(mock_eval: MagicMock) -> None:
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -107,7 +108,7 @@ def test_evaluate_returns_empty_batch_for_missing_samples(mock_eval):
 
 
 @patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
-def test_evaluate_processes_results(mock_eval):
+def test_evaluate_processes_results(mock_eval: MagicMock) -> None:
     samples = [inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -147,7 +148,7 @@ def test_evaluate_processes_results(mock_eval):
 
 
 @patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
-def test_evaluate_handles_failed_results(mock_eval):
+def test_evaluate_handles_failed_results(mock_eval: MagicMock) -> None:
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -172,7 +173,7 @@ def test_evaluate_handles_failed_results(mock_eval):
     assert result.scores == [0.0]
 
 
-def test_make_reflective_dataset():
+def test_make_reflective_dataset() -> None:
     samples = [inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -181,8 +182,6 @@ def test_make_reflective_dataset():
         scorer=inspect_ai.scorer.match(),
     )
     adapter = TaskAdapter(task=task, model="test-model")
-
-    from gepa.core.adapter import EvaluationBatch
 
     traj = InspectTrajectory(
         sample_id="s1",
@@ -194,7 +193,7 @@ def test_make_reflective_dataset():
         score=1.0,
         feedback="Correct!",
     )
-    eval_batch = EvaluationBatch(
+    eval_batch: EvaluationBatch[InspectTrajectory, InspectOutput] = EvaluationBatch(
         outputs=[InspectOutput(completion="4")],
         scores=[1.0],
         trajectories=[traj],
@@ -215,7 +214,7 @@ def test_make_reflective_dataset():
     assert result["system_prompt"][0]["score"] == 1.0
 
 
-def test_make_reflective_dataset_no_trajectories():
+def test_make_reflective_dataset_no_trajectories() -> None:
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -225,9 +224,7 @@ def test_make_reflective_dataset_no_trajectories():
     )
     adapter = TaskAdapter(task=task, model="test-model")
 
-    from gepa.core.adapter import EvaluationBatch
-
-    eval_batch = EvaluationBatch(
+    eval_batch: EvaluationBatch[InspectTrajectory, InspectOutput] = EvaluationBatch(
         outputs=[InspectOutput(completion="result")],
         scores=[1.0],
         trajectories=None,
@@ -243,7 +240,7 @@ def test_make_reflective_dataset_no_trajectories():
     assert result == {"system_prompt": [], "other": []}
 
 
-def test_custom_score_aggregator():
+def test_custom_score_aggregator() -> None:
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -252,7 +249,7 @@ def test_custom_score_aggregator():
         scorer=inspect_ai.scorer.match(),
     )
 
-    def custom_aggregator(scores):
+    def custom_aggregator(scores: dict[str, inspect_ai.scorer.Score]) -> float:
         return 0.5
 
     adapter = TaskAdapter(
@@ -262,7 +259,7 @@ def test_custom_score_aggregator():
     assert adapter.score_aggregator is custom_aggregator
 
 
-def test_custom_feedback_generator():
+def test_custom_feedback_generator() -> None:
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -271,7 +268,13 @@ def test_custom_feedback_generator():
         scorer=inspect_ai.scorer.match(),
     )
 
-    def custom_feedback(input_text, completion, target, scores, score):
+    def custom_feedback(
+        input_text: str,
+        completion: str,
+        target: str | list[str] | None,
+        scores: dict[str, inspect_ai.scorer.Score],
+        score: float,
+    ) -> str:
         return f"Custom: {score}"
 
     adapter = TaskAdapter(
