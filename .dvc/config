@@ -1,0 +1,7 @@
+[core]
+    remote = inspect-gepa-bridge-s3
+    autostage = true
+[cache]
+    type = "reflink,hardlink,symlink"
+['remote "inspect-gepa-bridge-s3"']
+    url = s3://production-metr-analysis-data/projects/inspect-gepa-bridge

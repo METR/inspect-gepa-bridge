@@ -12,7 +12,6 @@ from typing import Any, Generic, TypeVar
 
 import inspect_ai
 import inspect_ai.dataset
-import inspect_ai.log
 import inspect_ai.model
 import inspect_ai.scorer
 import inspect_ai.solver
@@ -204,12 +203,16 @@ class InspectGEPAAdapter(ABC, Generic[DataInst, Trajectory, RolloutOutput]):
             sample = samples_by_id.get(sample_id)
 
             if sample is None:
-                output = self._create_failed_output(inst, f"Sample {sample_id} not found")
+                output = self._create_failed_output(
+                    inst, f"Sample {sample_id} not found"
+                )
                 outputs.append(output)
                 scores.append(0.0)
                 if trajectories is not None:
                     trajectories.append(
-                        self.create_trajectory(inst, output, 0.0, f"Sample {sample_id} not found")
+                        self.create_trajectory(
+                            inst, output, 0.0, f"Sample {sample_id} not found"
+                        )
                     )
                 continue
 
