@@ -115,7 +115,7 @@ class TaskAdapter:
         while any(r > 0 for r in remaining.values()):
             sample_ids_to_eval = [sid for sid, count in remaining.items() if count > 0]
             samples_to_eval = [self._sample_index[sid] for sid in sample_ids_to_eval]
-            epochs = min(remaining[sid] for sid in remaining if remaining[sid] > 0)
+            epochs = min(remaining[sid] for sid in sample_ids_to_eval)
 
             eval_task = self._create_eval_task(samples_to_eval, system_prompt)
             results = scoring.run_inspect_eval(
