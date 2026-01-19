@@ -57,9 +57,11 @@ result = adapter.evaluate(
 
 The primary adapter class that wraps an existing Inspect Task. It:
 - Builds a sample index from the task's dataset
-- Prepends a system_message solver with the candidate's system prompt
+- Replaces any existing system messages with the GEPA-optimized prompt
 - Runs evaluation using Inspect AI
 - Returns results in GEPA's EvaluationBatch format
+
+**System Message Handling:** When evaluating with a candidate prompt, `TaskAdapter` removes any existing system messages from the task's solver chain and inserts the GEPA-optimized system prompt. This ensures the model receives exactly one system message - the one being optimized by GEPA.
 
 ```python
 adapter = TaskAdapter(

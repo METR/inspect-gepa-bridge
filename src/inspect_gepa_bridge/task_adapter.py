@@ -15,6 +15,8 @@ import inspect_ai.model
 import inspect_ai.scorer
 import inspect_ai.solver
 from gepa.core.adapter import EvaluationBatch
+from inspect_ai.model import ChatMessageSystem
+from inspect_ai.solver import Generate, Solver, TaskState, solver
 
 from inspect_gepa_bridge import scoring
 from inspect_gepa_bridge.types import (
@@ -25,6 +27,20 @@ from inspect_gepa_bridge.types import (
     ScoreAggregator,
     format_target,
 )
+
+
+@solver
+def set_system_message(template: str) -> Solver:
+    """Replace (not prepend) all system messages with a single new one."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        state.messages = [
+            msg for msg in state.messages if not isinstance(msg, ChatMessageSystem)
+        ]
+        state.messages.insert(0, ChatMessageSystem(content=template))
+        return state
+
+    return solve
 
 
 @dataclass
@@ -148,12 +164,12 @@ class TaskAdapter:
         original_solver = self.task.solver
         if isinstance(original_solver, list):
             solver_chain: list[inspect_ai.solver.Solver] = [
-                inspect_ai.solver.system_message(template=system_prompt),
+                set_system_message(template=system_prompt),
                 *original_solver,
             ]
         else:
             solver_chain = [
-                inspect_ai.solver.system_message(template=system_prompt),
+                set_system_message(template=system_prompt),
                 original_solver,
             ]
 
