@@ -1,8 +1,7 @@
-"""Tests for TaskAdapter."""
-
 from unittest.mock import MagicMock, patch
 
 import inspect_ai
+import pytest
 import inspect_ai.dataset
 import inspect_ai.model
 import inspect_ai.scorer
@@ -12,6 +11,21 @@ from gepa.core.adapter import EvaluationBatch
 from inspect_gepa_bridge import TaskAdapter
 from inspect_gepa_bridge.scoring import first_scorer_as_float
 from inspect_gepa_bridge.types import InspectOutput, InspectTrajectory
+
+
+def test_task_adapter_has_propose_new_texts_attribute():
+    samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
+    dataset = inspect_ai.dataset.MemoryDataset(samples)
+    task = inspect_ai.Task(
+        dataset=dataset,
+        solver=inspect_ai.solver.generate(),
+        scorer=inspect_ai.scorer.match(),
+    )
+
+    adapter = TaskAdapter(task=task, model="test-model")
+
+    assert hasattr(adapter, "propose_new_texts")
+    assert adapter.propose_new_texts is None
 
 
 def test_task_adapter_init_builds_sample_index():
@@ -174,6 +188,186 @@ def test_evaluate_handles_failed_results(mock_eval: MagicMock) -> None:
     assert result.scores == [0.0]
 
 
+@patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
+def test_evaluate_all_same_id_uses_epochs(mock_eval: MagicMock) -> None:
+    """Batch [s1, s1, s1] runs 1 eval with epochs=3."""
+    samples = [
+        inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1"),
+        inspect_ai.dataset.Sample(input="3+3=?", target="6", id="s2"),
+    ]
+    dataset = inspect_ai.dataset.MemoryDataset(samples)
+    task = inspect_ai.Task(
+        dataset=dataset,
+        solver=inspect_ai.solver.generate(),
+        scorer=inspect_ai.scorer.match(),
+    )
+    adapter = TaskAdapter(task=task, model="test-model")
+
+    def make_mock_sample(sid: str, epoch: int) -> MagicMock:
+        mock_sample = MagicMock()
+        mock_sample.id = sid
+        mock_sample.epoch = epoch
+        mock_sample.scores = {
+            "match": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT)
+        }
+        mock_sample.messages = []
+        mock_output = MagicMock()
+        mock_output.completion = f"4-epoch{epoch}"
+        mock_sample.output = mock_output
+        return mock_sample
+
+    mock_log = MagicMock()
+    mock_log.samples = [
+        make_mock_sample("s1", 1),
+        make_mock_sample("s1", 2),
+        make_mock_sample("s1", 3),
+    ]
+    mock_eval.return_value = [mock_log]
+
+    result = adapter.evaluate(
+        batch=["s1", "s1", "s1"],
+        candidate={"system_prompt": "test"},
+        capture_traces=False,
+    )
+
+    assert len(result.outputs) == 3
+    assert result.scores == [1.0, 1.0, 1.0]
+    assert result.outputs[0].completion == "4-epoch1"
+    assert result.outputs[1].completion == "4-epoch2"
+    assert result.outputs[2].completion == "4-epoch3"
+    mock_eval.assert_called_once()
+    call_args = mock_eval.call_args
+    assert call_args.kwargs["epochs"] == 3
+    eval_task = call_args.kwargs["task"]
+    assert len(list(eval_task.dataset)) == 1
+
+
+@patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
+def test_evaluate_mixed_duplicates_uses_multiple_evals(mock_eval: MagicMock) -> None:
+    """Batch [s1, s2, s1] runs 1 eval with epochs=2 for [s1,s2], then 1 eval with epochs=1 for [s1]."""
+    samples = [
+        inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1"),
+        inspect_ai.dataset.Sample(input="3+3=?", target="6", id="s2"),
+    ]
+    dataset = inspect_ai.dataset.MemoryDataset(samples)
+    task = inspect_ai.Task(
+        dataset=dataset,
+        solver=inspect_ai.solver.generate(),
+        scorer=inspect_ai.scorer.match(),
+    )
+    adapter = TaskAdapter(task=task, model="test-model")
+
+    def make_mock_sample(sid: str, completion: str) -> MagicMock:
+        mock_sample = MagicMock()
+        mock_sample.id = sid
+        mock_sample.scores = {
+            "match": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT)
+        }
+        mock_sample.messages = []
+        mock_output = MagicMock()
+        mock_output.completion = completion
+        mock_sample.output = mock_output
+        return mock_sample
+
+    # First eval: [s1, s2] with epochs=1 (min of {s1: 2, s2: 1} = 1)
+    mock_log1 = MagicMock()
+    mock_log1.samples = [
+        make_mock_sample("s1", "4-first"),
+        make_mock_sample("s2", "6-first"),
+    ]
+
+    # Second eval: [s1] with epochs=1 (remaining {s1: 1})
+    mock_log2 = MagicMock()
+    mock_log2.samples = [
+        make_mock_sample("s1", "4-second"),
+    ]
+
+    mock_eval.side_effect = [[mock_log1], [mock_log2]]
+
+    result = adapter.evaluate(
+        batch=["s1", "s2", "s1"],
+        candidate={"system_prompt": "test"},
+        capture_traces=False,
+    )
+
+    assert len(result.outputs) == 3
+    assert result.scores == [1.0, 1.0, 1.0]
+    assert result.outputs[0].completion == "4-first"
+    assert result.outputs[1].completion == "6-first"
+    assert result.outputs[2].completion == "4-second"
+    assert mock_eval.call_count == 2
+    first_call = mock_eval.call_args_list[0]
+    assert first_call.kwargs["epochs"] == 1
+    assert len(list(first_call.kwargs["task"].dataset)) == 2
+    second_call = mock_eval.call_args_list[1]
+    assert second_call.kwargs["epochs"] == 1
+    assert len(list(second_call.kwargs["task"].dataset)) == 1
+
+
+@patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
+def test_evaluate_complex_duplicates(mock_eval: MagicMock) -> None:
+    """Batch [s1, s2, s1, s2, s1] runs 1 eval with epochs=2 for [s1,s2], then 1 eval with epochs=1 for [s1]."""
+    samples = [
+        inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1"),
+        inspect_ai.dataset.Sample(input="3+3=?", target="6", id="s2"),
+    ]
+    dataset = inspect_ai.dataset.MemoryDataset(samples)
+    task = inspect_ai.Task(
+        dataset=dataset,
+        solver=inspect_ai.solver.generate(),
+        scorer=inspect_ai.scorer.match(),
+    )
+    adapter = TaskAdapter(task=task, model="test-model")
+
+    def make_mock_sample(sid: str, completion: str) -> MagicMock:
+        mock_sample = MagicMock()
+        mock_sample.id = sid
+        mock_sample.scores = {
+            "match": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT)
+        }
+        mock_sample.messages = []
+        mock_output = MagicMock()
+        mock_output.completion = completion
+        mock_sample.output = mock_output
+        return mock_sample
+
+    # First eval: [s1, s2] with epochs=2 (min of {s1: 3, s2: 2} = 2)
+    mock_log1 = MagicMock()
+    mock_log1.samples = [
+        make_mock_sample("s1", "4-e1"),
+        make_mock_sample("s2", "6-e1"),
+        make_mock_sample("s1", "4-e2"),
+        make_mock_sample("s2", "6-e2"),
+    ]
+
+    # Second eval: [s1] with epochs=1 (remaining {s1: 1})
+    mock_log2 = MagicMock()
+    mock_log2.samples = [
+        make_mock_sample("s1", "4-e3"),
+    ]
+
+    mock_eval.side_effect = [[mock_log1], [mock_log2]]
+
+    result = adapter.evaluate(
+        batch=["s1", "s2", "s1", "s2", "s1"],
+        candidate={"system_prompt": "test"},
+        capture_traces=False,
+    )
+
+    assert len(result.outputs) == 5
+    assert result.scores == [1.0, 1.0, 1.0, 1.0, 1.0]
+    assert result.outputs[0].completion == "4-e1"
+    assert result.outputs[1].completion == "6-e1"
+    assert result.outputs[2].completion == "4-e2"
+    assert result.outputs[3].completion == "6-e2"
+    assert result.outputs[4].completion == "4-e3"
+    assert mock_eval.call_count == 2
+    first_call = mock_eval.call_args_list[0]
+    assert first_call.kwargs["epochs"] == 2
+    second_call = mock_eval.call_args_list[1]
+    assert second_call.kwargs["epochs"] == 1
+
+
 def test_make_reflective_dataset() -> None:
     samples = [inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
@@ -285,34 +479,37 @@ def test_custom_feedback_generator() -> None:
     assert adapter.feedback_generator is custom_feedback
 
 
-def test_first_scorer_as_float_empty_scores():
-    assert first_scorer_as_float({}) == 0.0
+@pytest.mark.parametrize(
+    ("scores", "expected"),
+    [
+        ({}, 0.0),
+        (
+            {
+                "scorer1": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT),
+                "scorer2": inspect_ai.scorer.Score(value=inspect_ai.scorer.INCORRECT),
+            },
+            1.0,
+        ),
+    ],
+)
+def test_first_scorer_as_float(scores: dict, expected: float):
+    assert first_scorer_as_float(scores) == expected
 
 
-def test_first_scorer_as_float_with_scores():
-    scores = {
-        "scorer1": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT),
-        "scorer2": inspect_ai.scorer.Score(value=inspect_ai.scorer.INCORRECT),
-    }
-    assert first_scorer_as_float(scores) == 1.0
-
-
-def test_format_input_string():
-    samples = [inspect_ai.dataset.Sample(input="test input", target="result", id="s1")]
-    dataset = inspect_ai.dataset.MemoryDataset(samples)
-    task = inspect_ai.Task(
-        dataset=dataset,
-        solver=inspect_ai.solver.generate(),
-        scorer=inspect_ai.scorer.match(),
-    )
-    adapter = TaskAdapter(task=task, model="test-model")
-
-    result = adapter._format_input("test input")
-
-    assert result == "test input"
-
-
-def test_format_input_chat_messages():
+@pytest.mark.parametrize(
+    ("input_data", "expected"),
+    [
+        ("test input", "test input"),
+        (
+            [
+                inspect_ai.model.ChatMessageUser(content="Hello"),
+                inspect_ai.model.ChatMessageAssistant(content="Hi there"),
+            ],
+            "Hello\nHi there",
+        ),
+    ],
+)
+def test_format_input(input_data, expected: str):
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -322,11 +519,4 @@ def test_format_input_chat_messages():
     )
     adapter = TaskAdapter(task=task, model="test-model")
 
-    messages: list[inspect_ai.model.ChatMessage] = [
-        inspect_ai.model.ChatMessageUser(content="Hello"),
-        inspect_ai.model.ChatMessageAssistant(content="Hi there"),
-    ]
-
-    result = adapter._format_input(messages)
-
-    assert result == "Hello\nHi there"
+    assert adapter._format_input(input_data) == expected
