@@ -6,6 +6,7 @@ directly, without requiring users to implement abstract methods.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import inspect_ai
@@ -24,6 +25,13 @@ from inspect_gepa_bridge.types import (
     ScoreAggregator,
     format_target,
 )
+
+
+@dataclass
+class _SampleResult:
+    output: InspectOutput
+    score: float
+    trajectory: InspectTrajectory | None
 
 
 class TaskAdapter:
@@ -55,19 +63,6 @@ class TaskAdapter:
         log_dir: str | None = None,
         model_roles: dict[str, str] | None = None,
     ):
-        """
-        Initialize the adapter with an existing Inspect Task.
-
-        Args:
-            task: The Inspect Task to wrap (must have dataset, solver, scorer)
-            model: Model identifier for evaluation (e.g., "anthropic/claude-sonnet-4-20250514")
-            score_aggregator: Optional function to aggregate multiple scores to float.
-                Defaults to using the first scorer's result.
-            feedback_generator: Optional function to generate feedback strings.
-                Defaults to a simple format showing input, completion, target, and score.
-            log_dir: Optional directory for Inspect logs
-            model_roles: Optional mapping of role names to model identifiers
-        """
         self.task = task
         self.model = model
         self.score_aggregator = score_aggregator or scoring.first_scorer_as_float
@@ -77,20 +72,17 @@ class TaskAdapter:
         self.log_dir = log_dir
         self.model_roles = model_roles or {}
 
-        # Build sample index from task dataset
         self._sample_index: dict[SampleId, inspect_ai.dataset.Sample] = {}
         self._sample_ids: list[SampleId] = []
         self._build_sample_index()
 
     def _build_sample_index(self) -> None:
-        """Build an index of samples by their IDs for efficient lookup."""
         for i, sample in enumerate(self.task.dataset):
             sample_id: SampleId = sample.id if sample.id is not None else i
             self._sample_index[sample_id] = sample
             self._sample_ids.append(sample_id)
 
     def get_sample_ids(self) -> list[SampleId]:
-        """Return all sample IDs for GEPA to sample from."""
         return list(self._sample_ids)
 
     def evaluate(
@@ -99,59 +91,60 @@ class TaskAdapter:
         candidate: dict[str, str],
         capture_traces: bool = False,
     ) -> EvaluationBatch[InspectTrajectory, InspectOutput]:
-        """
-        Run evaluation on a batch of sample IDs using Inspect AI.
+        """Run evaluation on a batch of sample IDs using Inspect AI.
 
-        Args:
-            batch: List of sample IDs to evaluate
-            candidate: Dict containing "system_prompt" key with the prompt to test
-            capture_traces: Whether to capture full trajectories
-
-        Returns:
-            EvaluationBatch with outputs, scores, and optionally trajectories
+        Handles duplicate sample IDs by running multiple Inspect AI evals with
+        epochs. For example, batch [1, 2, 1, 2, 1] runs:
+        - Eval with [1, 2], epochs=2 (covers 2 of each)
+        - Eval with [1], epochs=1 (covers remaining 1)
         """
         system_prompt = candidate.get("system_prompt", "")
 
-        # Get samples for the batch
-        samples = [
-            self._sample_index[sid] for sid in batch if sid in self._sample_index
-        ]
-        if not samples:
+        remaining: dict[SampleId, int] = {}
+        for sid in batch:
+            if sid in self._sample_index:
+                remaining[sid] = remaining.get(sid, 0) + 1
+
+        if not remaining:
             return self._create_empty_batch(batch, capture_traces)
 
-        # Create a new task with the batch samples and prepended system_message
-        eval_task = self._create_eval_task(samples, system_prompt)
+        all_results: dict[tuple[SampleId, int], _SampleResult] = {}
+        epoch_counters: dict[SampleId, int] = {sid: 0 for sid in remaining}
+        model_roles_resolved = self._resolve_model_roles()
 
-        # Run evaluation
-        model_roles_resolved = (
-            {
-                role: inspect_ai.model.get_model(mid)
-                for role, mid in self.model_roles.items()
-            }
-            if self.model_roles
-            else None
-        )
-        results = scoring.run_inspect_eval(
-            task=eval_task,
-            model=self.model,
-            log_dir=self.log_dir,
-            model_roles=model_roles_resolved,
-        )
+        while any(r > 0 for r in remaining.values()):
+            sample_ids_to_eval = [sid for sid, count in remaining.items() if count > 0]
+            samples_to_eval = [self._sample_index[sid] for sid in sample_ids_to_eval]
+            epochs = min(remaining[sid] for sid in remaining if remaining[sid] > 0)
 
-        return self._process_results(results, batch, capture_traces)
+            eval_task = self._create_eval_task(samples_to_eval, system_prompt)
+            results = scoring.run_inspect_eval(
+                task=eval_task,
+                model=self.model,
+                log_dir=self.log_dir,
+                model_roles=model_roles_resolved,
+                epochs=epochs,
+            )
+
+            self._collect_epoch_results(
+                results,
+                samples_to_eval,
+                epochs,
+                all_results,
+                epoch_counters,
+                capture_traces,
+            )
+
+            for sid in sample_ids_to_eval:
+                remaining[sid] -= epochs
+
+        return self._build_batch_from_results(batch, all_results, capture_traces)
 
     def _create_eval_task(
         self,
         samples: list[inspect_ai.dataset.Sample],
         system_prompt: str,
     ) -> inspect_ai.Task:
-        """
-        Create a new Task for evaluation with the system prompt prepended.
-
-        This creates a new task that doesn't mutate the original task.
-        The system_message solver is chained before the original solver.
-        """
-        # Get the original solver(s) and build new chain with system_message prepended
         original_solver = self.task.solver
         if isinstance(original_solver, list):
             solver_chain: list[inspect_ai.solver.Solver] = [
@@ -172,35 +165,123 @@ class TaskAdapter:
             message_limit=self.task.message_limit,
         )
 
-    def _process_results(
+    def _resolve_model_roles(self) -> dict[str, inspect_ai.model.Model] | None:
+        if not self.model_roles:
+            return None
+        return {
+            role: inspect_ai.model.get_model(mid)
+            for role, mid in self.model_roles.items()
+        }
+
+    def _collect_epoch_results(
         self,
         eval_results: list[Any],  # list[inspect_ai.log.EvalLog]
+        samples: list[inspect_ai.dataset.Sample],
+        epochs: int,
+        all_results: dict[tuple[SampleId, int], _SampleResult],
+        epoch_counters: dict[SampleId, int],
+        capture_traces: bool,
+    ) -> None:
+        if not eval_results or eval_results[0].samples is None:
+            for sample in samples:
+                sid: SampleId = sample.id  # pyright: ignore[reportAssignmentType]
+                for _ in range(epochs):
+                    epoch_idx = epoch_counters[sid]
+                    epoch_counters[sid] += 1
+                    all_results[(sid, epoch_idx)] = _SampleResult(
+                        output=InspectOutput(
+                            completion="", scores={}, error="Eval failed: no results"
+                        ),
+                        score=0.0,
+                        trajectory=(
+                            self._create_failed_trajectory(
+                                sid, "Eval failed: no results"
+                            )
+                            if capture_traces
+                            else None
+                        ),
+                    )
+            return
+
+        eval_log = eval_results[0]
+        for eval_sample in eval_log.samples:
+            sample_id: SampleId = eval_sample.id  # pyright: ignore[reportAssignmentType]
+            epoch_idx = epoch_counters[sample_id]
+            epoch_counters[sample_id] += 1
+
+            original_sample = self._sample_index.get(sample_id)
+            if original_sample is None:
+                all_results[(sample_id, epoch_idx)] = _SampleResult(
+                    output=InspectOutput(
+                        completion="",
+                        scores={},
+                        error=f"Sample {sample_id} not found in index",
+                    ),
+                    score=0.0,
+                    trajectory=(
+                        self._create_failed_trajectory(
+                            sample_id, f"Sample {sample_id} not found"
+                        )
+                        if capture_traces
+                        else None
+                    ),
+                )
+                continue
+
+            completion = scoring.get_completion_from_sample(eval_sample)
+            sample_scores: dict[str, inspect_ai.scorer.Score] = eval_sample.scores or {}
+            score = self.score_aggregator(sample_scores)
+
+            output = InspectOutput(completion=completion, scores=sample_scores)
+
+            trajectory: InspectTrajectory | None = None
+            if capture_traces:
+                target = original_sample.target
+                input_text = self._format_input(original_sample.input)
+                feedback = self.feedback_generator(
+                    input_text, completion, target, sample_scores, score
+                )
+                trajectory = InspectTrajectory(
+                    sample_id=sample_id,
+                    input=original_sample.input,
+                    target=target,
+                    messages=(
+                        list(eval_sample.messages) if eval_sample.messages else []
+                    ),
+                    completion=completion,
+                    scores=sample_scores,
+                    score=score,
+                    feedback=feedback,
+                )
+
+            all_results[(sample_id, epoch_idx)] = _SampleResult(
+                output=output, score=score, trajectory=trajectory
+            )
+
+    def _build_batch_from_results(
+        self,
         batch: list[SampleId],
+        all_results: dict[tuple[SampleId, int], _SampleResult],
         capture_traces: bool,
     ) -> EvaluationBatch[InspectTrajectory, InspectOutput]:
-        """Process Inspect evaluation results into GEPA's EvaluationBatch format."""
         outputs: list[InspectOutput] = []
         scores: list[float] = []
         trajectories: list[InspectTrajectory] | None = [] if capture_traces else None
-
-        # Handle empty or failed results
-        if not eval_results or eval_results[0].samples is None:
-            return self._create_empty_batch(batch, capture_traces)
-
-        eval_log = eval_results[0]
-        samples_by_id: dict[Any, Any] = {s.id: s for s in eval_log.samples}
+        batch_epoch_counters: dict[SampleId, int] = {}
 
         for sample_id in batch:
-            eval_sample = samples_by_id.get(sample_id)
-            original_sample = self._sample_index.get(sample_id)
+            epoch_idx = batch_epoch_counters.get(sample_id, 0)
+            batch_epoch_counters[sample_id] = epoch_idx + 1
 
-            if eval_sample is None or original_sample is None:
-                output = InspectOutput(
-                    completion="",
-                    scores={},
-                    error=f"Sample {sample_id} not found in results",
+            result = all_results.get((sample_id, epoch_idx))
+            if result is None:
+                outputs.append(
+                    InspectOutput(
+                        completion="",
+                        scores={},
+                        error=f"Sample {sample_id} not found in results",
+                    )
                 )
-                outputs.append(output)
                 scores.append(0.0)
                 if trajectories is not None:
                     trajectories.append(
@@ -208,41 +289,15 @@ class TaskAdapter:
                             sample_id, f"Sample {sample_id} not found"
                         )
                     )
-                continue
-
-            # Extract completion and scores
-            completion = scoring.get_completion_from_sample(eval_sample)
-            sample_scores: dict[str, inspect_ai.scorer.Score] = eval_sample.scores or {}
-
-            output = InspectOutput(completion=completion, scores=sample_scores)
-            outputs.append(output)
-
-            # Compute aggregated score
-            score = self.score_aggregator(sample_scores)
-            scores.append(score)
-
-            # Create trajectory if capturing traces
-            if trajectories is not None:
-                # Get target from original sample
-                target = original_sample.target
-
-                # Generate feedback
-                input_text = self._format_input(original_sample.input)
-                feedback = self.feedback_generator(
-                    input_text, completion, target, sample_scores, score
-                )
-
-                trajectory = InspectTrajectory(
-                    sample_id=sample_id,
-                    input=original_sample.input,
-                    target=target,
-                    messages=list(eval_sample.messages) if eval_sample.messages else [],
-                    completion=completion,
-                    scores=sample_scores,
-                    score=score,
-                    feedback=feedback,
-                )
-                trajectories.append(trajectory)
+            else:
+                outputs.append(result.output)
+                scores.append(result.score)
+                if trajectories is not None and result.trajectory is not None:
+                    trajectories.append(result.trajectory)
+                elif trajectories is not None:
+                    trajectories.append(
+                        self._create_failed_trajectory(sample_id, "No trajectory")
+                    )
 
         return EvaluationBatch(
             outputs=outputs,
@@ -256,7 +311,6 @@ class TaskAdapter:
         batch: list[SampleId],
         capture_traces: bool,
     ) -> EvaluationBatch[InspectTrajectory, InspectOutput]:
-        """Create an empty/failed batch result."""
         outputs: list[InspectOutput] = []
         scores: list[float] = []
         trajectories: list[InspectTrajectory] | None = [] if capture_traces else None
@@ -284,7 +338,6 @@ class TaskAdapter:
         sample_id: SampleId,
         error: str,
     ) -> InspectTrajectory:
-        """Create a trajectory representing a failed evaluation."""
         return InspectTrajectory(
             sample_id=sample_id,
             input="",
@@ -300,10 +353,8 @@ class TaskAdapter:
         self,
         input_data: str | list[inspect_ai.model.ChatMessage],
     ) -> str:
-        """Format input data as a string for feedback generation."""
         if isinstance(input_data, str):
             return input_data
-        # For chat messages, concatenate content
         return "\n".join(
             msg.content if isinstance(msg.content, str) else str(msg.content)
             for msg in input_data
@@ -315,20 +366,6 @@ class TaskAdapter:
         eval_batch: EvaluationBatch[InspectTrajectory, InspectOutput],
         components_to_update: list[str],
     ) -> Mapping[str, Sequence[Mapping[str, Any]]]:
-        """
-        Build the reflective dataset for GEPA instruction refinement.
-
-        This creates a dataset that can be used by the teacher LLM to
-        generate improved prompts based on evaluation results.
-
-        Args:
-            candidate: The candidate prompt configuration
-            eval_batch: The evaluation batch results
-            components_to_update: List of components being updated
-
-        Returns:
-            Mapping from component name to sequence of examples
-        """
         if eval_batch.trajectories is None:
             return {comp: [] for comp in components_to_update}
 
@@ -341,17 +378,14 @@ class TaskAdapter:
             )
             target_text = format_target(traj.target)
 
-            # Use GEPA's recommended schema (see gepa.core.adapter.GEPAAdapter)
             example: dict[str, Any] = {
                 "Inputs": input_text,
                 "Generated Outputs": traj.completion,
                 "Feedback": traj.feedback,
-                # Additional keys (allowed per GEPA docs)
                 "target": target_text,
                 "score": traj.score,
                 "scores": {k: str(v.value) for k, v in traj.scores.items()},
             }
             examples.append(example)
 
-        # Map the same examples to all components being updated
         return {comp: examples for comp in components_to_update}

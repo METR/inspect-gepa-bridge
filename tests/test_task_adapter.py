@@ -174,6 +174,182 @@ def test_evaluate_handles_failed_results(mock_eval: MagicMock) -> None:
     assert result.scores == [0.0]
 
 
+@patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
+def test_evaluate_all_same_id_uses_epochs(mock_eval: MagicMock) -> None:
+    """Batch [s1, s1, s1] runs 1 eval with epochs=3."""
+    samples = [
+        inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1"),
+        inspect_ai.dataset.Sample(input="3+3=?", target="6", id="s2"),
+    ]
+    dataset = inspect_ai.dataset.MemoryDataset(samples)
+    task = inspect_ai.Task(
+        dataset=dataset,
+        solver=inspect_ai.solver.generate(),
+        scorer=inspect_ai.scorer.match(),
+    )
+    adapter = TaskAdapter(task=task, model="test-model")
+
+    def make_mock_sample(sid: str, epoch: int) -> MagicMock:
+        mock_sample = MagicMock()
+        mock_sample.id = sid
+        mock_sample.epoch = epoch
+        mock_sample.scores = {
+            "match": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT)
+        }
+        mock_sample.messages = []
+        mock_output = MagicMock()
+        mock_output.completion = f"4-epoch{epoch}"
+        mock_sample.output = mock_output
+        return mock_sample
+
+    mock_log = MagicMock()
+    mock_log.samples = [
+        make_mock_sample("s1", 1),
+        make_mock_sample("s1", 2),
+        make_mock_sample("s1", 3),
+    ]
+    mock_eval.return_value = [mock_log]
+
+    result = adapter.evaluate(
+        batch=["s1", "s1", "s1"],
+        candidate={"system_prompt": "test"},
+        capture_traces=False,
+    )
+
+    assert len(result.outputs) == 3
+    assert result.scores == [1.0, 1.0, 1.0]
+    assert result.outputs[0].completion == "4-epoch1"
+    assert result.outputs[1].completion == "4-epoch2"
+    assert result.outputs[2].completion == "4-epoch3"
+    mock_eval.assert_called_once()
+    call_args = mock_eval.call_args
+    assert call_args.kwargs["epochs"] == 3
+    eval_task = call_args.kwargs["task"]
+    assert len(list(eval_task.dataset)) == 1
+
+
+@patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
+def test_evaluate_mixed_duplicates_uses_multiple_evals(mock_eval: MagicMock) -> None:
+    """Batch [s1, s2, s1] runs 2 evals."""
+    samples = [
+        inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1"),
+        inspect_ai.dataset.Sample(input="3+3=?", target="6", id="s2"),
+    ]
+    dataset = inspect_ai.dataset.MemoryDataset(samples)
+    task = inspect_ai.Task(
+        dataset=dataset,
+        solver=inspect_ai.solver.generate(),
+        scorer=inspect_ai.scorer.match(),
+    )
+    adapter = TaskAdapter(task=task, model="test-model")
+
+    def make_mock_sample(sid: str, completion: str) -> MagicMock:
+        mock_sample = MagicMock()
+        mock_sample.id = sid
+        mock_sample.scores = {
+            "match": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT)
+        }
+        mock_sample.messages = []
+        mock_output = MagicMock()
+        mock_output.completion = completion
+        mock_sample.output = mock_output
+        return mock_sample
+
+    mock_log1 = MagicMock()
+    mock_log1.samples = [
+        make_mock_sample("s1", "4-first"),
+        make_mock_sample("s2", "6-first"),
+    ]
+
+    mock_log2 = MagicMock()
+    mock_log2.samples = [
+        make_mock_sample("s1", "4-second"),
+    ]
+
+    mock_eval.side_effect = [[mock_log1], [mock_log2]]
+
+    result = adapter.evaluate(
+        batch=["s1", "s2", "s1"],
+        candidate={"system_prompt": "test"},
+        capture_traces=False,
+    )
+
+    assert len(result.outputs) == 3
+    assert result.scores == [1.0, 1.0, 1.0]
+    assert result.outputs[0].completion == "4-first"
+    assert result.outputs[1].completion == "6-first"
+    assert result.outputs[2].completion == "4-second"
+    assert mock_eval.call_count == 2
+    first_call = mock_eval.call_args_list[0]
+    assert first_call.kwargs["epochs"] == 1
+    assert len(list(first_call.kwargs["task"].dataset)) == 2
+    second_call = mock_eval.call_args_list[1]
+    assert second_call.kwargs["epochs"] == 1
+    assert len(list(second_call.kwargs["task"].dataset)) == 1
+
+
+@patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
+def test_evaluate_complex_duplicates(mock_eval: MagicMock) -> None:
+    """Batch [s1, s2, s1, s2, s1] runs 2 evals with different epochs."""
+    samples = [
+        inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1"),
+        inspect_ai.dataset.Sample(input="3+3=?", target="6", id="s2"),
+    ]
+    dataset = inspect_ai.dataset.MemoryDataset(samples)
+    task = inspect_ai.Task(
+        dataset=dataset,
+        solver=inspect_ai.solver.generate(),
+        scorer=inspect_ai.scorer.match(),
+    )
+    adapter = TaskAdapter(task=task, model="test-model")
+
+    def make_mock_sample(sid: str, completion: str) -> MagicMock:
+        mock_sample = MagicMock()
+        mock_sample.id = sid
+        mock_sample.scores = {
+            "match": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT)
+        }
+        mock_sample.messages = []
+        mock_output = MagicMock()
+        mock_output.completion = completion
+        mock_sample.output = mock_output
+        return mock_sample
+
+    mock_log1 = MagicMock()
+    mock_log1.samples = [
+        make_mock_sample("s1", "4-e1"),
+        make_mock_sample("s2", "6-e1"),
+        make_mock_sample("s1", "4-e2"),
+        make_mock_sample("s2", "6-e2"),
+    ]
+
+    mock_log2 = MagicMock()
+    mock_log2.samples = [
+        make_mock_sample("s1", "4-e3"),
+    ]
+
+    mock_eval.side_effect = [[mock_log1], [mock_log2]]
+
+    result = adapter.evaluate(
+        batch=["s1", "s2", "s1", "s2", "s1"],
+        candidate={"system_prompt": "test"},
+        capture_traces=False,
+    )
+
+    assert len(result.outputs) == 5
+    assert result.scores == [1.0, 1.0, 1.0, 1.0, 1.0]
+    assert result.outputs[0].completion == "4-e1"
+    assert result.outputs[1].completion == "6-e1"
+    assert result.outputs[2].completion == "4-e2"
+    assert result.outputs[3].completion == "6-e2"
+    assert result.outputs[4].completion == "4-e3"
+    assert mock_eval.call_count == 2
+    first_call = mock_eval.call_args_list[0]
+    assert first_call.kwargs["epochs"] == 2
+    second_call = mock_eval.call_args_list[1]
+    assert second_call.kwargs["epochs"] == 1
+
+
 def test_make_reflective_dataset() -> None:
     samples = [inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
