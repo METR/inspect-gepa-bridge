@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import inspect_ai
 import inspect_ai.dataset
 import inspect_ai.model
@@ -11,6 +13,7 @@ from gepa.core.adapter import EvaluationBatch
 
 from inspect_gepa_bridge import TaskAdapter
 from inspect_gepa_bridge.scoring import first_scorer_as_float
+from inspect_gepa_bridge.task_adapter import set_system_message
 from inspect_gepa_bridge.types import InspectOutput, InspectTrajectory
 
 
@@ -48,7 +51,7 @@ def test_task_adapter_assigns_sequential_ids_when_missing():
     assert adapter.get_sample_ids() == [0, 1]
 
 
-def test_create_eval_task_prepends_system_message():
+def test_create_eval_task_sets_system_message():
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     original_solver = inspect_ai.solver.generate()
@@ -509,3 +512,56 @@ def test_format_input_chat_messages():
     result = adapter._format_input(messages)
 
     assert result == "Hello\nHi there"
+
+
+@pytest.mark.asyncio
+async def test_set_system_message_replaces_existing():
+    solver_fn = set_system_message(template="New system")
+    state = MagicMock()
+    state.messages = [
+        inspect_ai.model.ChatMessageSystem(content="Old system"),
+        inspect_ai.model.ChatMessageUser(content="User"),
+    ]
+
+    result = await solver_fn(state, MagicMock())
+
+    assert len(result.messages) == 2
+    assert isinstance(result.messages[0], inspect_ai.model.ChatMessageSystem)
+    assert result.messages[0].content == "New system"
+    assert isinstance(result.messages[1], inspect_ai.model.ChatMessageUser)
+
+
+@pytest.mark.asyncio
+async def test_set_system_message_adds_when_none_exist():
+    solver_fn = set_system_message(template="New system")
+    state = MagicMock()
+    state.messages = [
+        inspect_ai.model.ChatMessageUser(content="User"),
+        inspect_ai.model.ChatMessageAssistant(content="Assistant"),
+    ]
+
+    result = await solver_fn(state, MagicMock())
+
+    assert len(result.messages) == 3
+    assert isinstance(result.messages[0], inspect_ai.model.ChatMessageSystem)
+    assert result.messages[0].content == "New system"
+
+
+@pytest.mark.asyncio
+async def test_set_system_message_removes_multiple():
+    solver_fn = set_system_message(template="New system")
+    state = MagicMock()
+    state.messages = [
+        inspect_ai.model.ChatMessageSystem(content="Old 1"),
+        inspect_ai.model.ChatMessageUser(content="User"),
+        inspect_ai.model.ChatMessageSystem(content="Old 2"),
+        inspect_ai.model.ChatMessageAssistant(content="Assistant"),
+    ]
+
+    result = await solver_fn(state, MagicMock())
+
+    assert len(result.messages) == 3
+    assert isinstance(result.messages[0], inspect_ai.model.ChatMessageSystem)
+    assert result.messages[0].content == "New system"
+    assert isinstance(result.messages[1], inspect_ai.model.ChatMessageUser)
+    assert isinstance(result.messages[2], inspect_ai.model.ChatMessageAssistant)
