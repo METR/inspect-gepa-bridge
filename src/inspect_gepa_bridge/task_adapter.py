@@ -69,6 +69,11 @@ class TaskAdapter:
         dataset = adapter.get_sample_ids()
     """
 
+    # Tell GEPA to use its default instruction proposal mechanism.
+    # GEPA's reflective mutation checks this attribute; if None, it uses its
+    # built-in proposal logic. Without this attribute, hasattr() fails.
+    propose_new_texts = None
+
     def __init__(
         self,
         task: inspect_ai.Task,
