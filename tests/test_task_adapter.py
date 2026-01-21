@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import inspect_ai
 import inspect_ai.dataset
@@ -12,6 +13,7 @@ from gepa.core.adapter import EvaluationBatch
 
 from inspect_gepa_bridge import TaskAdapter
 from inspect_gepa_bridge.scoring import first_scorer_as_float
+from inspect_gepa_bridge.task_adapter import set_system_message
 from inspect_gepa_bridge.types import InspectOutput, InspectTrajectory
 
 
@@ -467,3 +469,30 @@ def test_format_input(
     adapter = TaskAdapter(task=task, model="test-model")
 
     assert adapter._format_input(input_data) == expected
+
+
+def test_set_system_message() -> None:
+    mock_generate = AsyncMock(spec=inspect_ai.solver.Generate)
+
+    wrapped_solver = set_system_message(
+        inspect_ai.solver.chain(
+            inspect_ai.solver.system_message("Test 1"), inspect_ai.solver.generate()
+        ),
+        "Test 2",
+    )
+
+    state = inspect_ai.solver.TaskState(
+        model=inspect_ai.model.ModelName("mockllm/model"),
+        sample_id="s1",
+        epoch=0,
+        input="2+2=?",
+        messages=[],
+        target=inspect_ai.scorer.Target("4"),
+    )
+
+    asyncio.run(wrapped_solver(state, mock_generate))
+
+    mock_generate.assert_called_once()
+    assert len(state.messages) == 1
+    assert isinstance(state.messages[0], inspect_ai.model.ChatMessageSystem)
+    assert state.messages[0].content == "Test 2"
