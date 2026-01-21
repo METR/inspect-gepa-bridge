@@ -471,13 +471,33 @@ def test_format_input(
     assert adapter._format_input(input_data) == expected
 
 
-def test_set_system_message() -> None:
+@pytest.mark.parametrize(
+    ("solvers"),
+    [
+        pytest.param(
+            [inspect_ai.solver.system_message("Test 1")], id="single_system_message"
+        ),
+        pytest.param(
+            [
+                inspect_ai.solver.system_message(template)
+                for template in ["Test 1", "Test 2"]
+            ],
+            id="multiple_system_messages",
+        ),
+        pytest.param(
+            [
+                inspect_ai.solver.system_message("Test 1"),
+                inspect_ai.solver.user_message("Test 2"),
+            ],
+            id="system_and_user_messages",
+        ),
+    ],
+)
+def test_set_system_message(solvers: list[inspect_ai.solver.Solver]) -> None:
     mock_generate = AsyncMock(spec=inspect_ai.solver.Generate)
 
     wrapped_solver = set_system_message(
-        inspect_ai.solver.chain(
-            inspect_ai.solver.system_message("Test 1"), inspect_ai.solver.generate()
-        ),
+        inspect_ai.solver.chain(*solvers, inspect_ai.solver.generate()),
         "Test 2",
     )
 
@@ -493,6 +513,7 @@ def test_set_system_message() -> None:
     asyncio.run(wrapped_solver(state, mock_generate))
 
     mock_generate.assert_called_once()
-    assert len(state.messages) == 1
-    assert isinstance(state.messages[0], inspect_ai.model.ChatMessageSystem)
-    assert state.messages[0].content == "Test 2"
+    generate_state = mock_generate.call_args[0][0]
+    assert isinstance(generate_state, inspect_ai.solver.TaskState)
+    assert isinstance(generate_state.messages[0], inspect_ai.model.ChatMessageSystem)
+    assert generate_state.messages[0].content == "Test 2"
