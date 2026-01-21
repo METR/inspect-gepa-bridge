@@ -29,7 +29,7 @@ class ScorerResult:
     scorer_name: str
 
     @property
-    def value(self) -> Any:
+    def value(self) -> inspect_ai.scorer.Value | None:
         """Get the score value, or None if no score."""
         return self.score.value if self.score else None
 
