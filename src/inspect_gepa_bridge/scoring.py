@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import inspect_ai
+import inspect_ai.log
 import inspect_ai.model
 import inspect_ai.scorer
 
@@ -99,7 +100,7 @@ def run_inspect_eval(
     log_dir: str | None = None,
     model_roles: dict[str, inspect_ai.model.Model] | None = None,
     **kwargs: Any,
-) -> list[Any]:  # list[inspect_ai.log.EvalLog]
+) -> list[inspect_ai.log.EvalLog]:
     """
     Run an Inspect evaluation with common options.
 
@@ -125,21 +126,6 @@ def run_inspect_eval(
         eval_kwargs["model_roles"] = model_roles
 
     return inspect_ai.eval(task, **eval_kwargs)
-
-
-def get_completion_from_sample(sample: Any) -> str:
-    """
-    Extract the completion text from an Inspect sample result.
-
-    Args:
-        sample: The Inspect EvalSample from evaluation results
-
-    Returns:
-        The completion text, or empty string if not available
-    """
-    if sample.output is None:
-        return ""
-    return sample.output.completion or ""
 
 
 def first_scorer_as_float(scores: dict[str, inspect_ai.scorer.Score]) -> float:

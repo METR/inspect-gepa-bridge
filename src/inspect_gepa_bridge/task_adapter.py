@@ -7,6 +7,7 @@ from typing import Any
 import gepa.core.adapter
 import inspect_ai
 import inspect_ai.dataset
+import inspect_ai.log
 import inspect_ai.model
 import inspect_ai.scorer
 import inspect_ai.solver
@@ -166,7 +167,7 @@ class TaskAdapter(
 
     def _collect_epoch_results(
         self,
-        eval_results: list[Any],  # list[inspect_ai.log.EvalLog]
+        eval_results: list[inspect_ai.log.EvalLog],
         samples: list[inspect_ai.dataset.Sample],
         epochs: int,
         all_results: dict[tuple[SampleId, int], _SampleResult],
@@ -194,60 +195,64 @@ class TaskAdapter(
                     )
             return
 
-        eval_log = eval_results[0]
-        for eval_sample in eval_log.samples:
-            sample_id: SampleId = eval_sample.id  # pyright: ignore[reportAssignmentType]
-            epoch_idx = epoch_counters[sample_id]
-            epoch_counters[sample_id] += 1
+        for eval_log in eval_results:
+            assert eval_log.samples is not None
 
-            original_sample = self._sample_index.get(sample_id)
-            if original_sample is None:
+            for eval_sample in eval_log.samples:
+                sample_id: SampleId = eval_sample.id  # pyright: ignore[reportAssignmentType]
+                epoch_idx = epoch_counters[sample_id]
+                epoch_counters[sample_id] += 1
+
+                original_sample = self._sample_index.get(sample_id)
+                if original_sample is None:
+                    all_results[(sample_id, epoch_idx)] = _SampleResult(
+                        output=InspectOutput(
+                            completion="",
+                            scores={},
+                            error=f"Sample {sample_id} not found in index",
+                        ),
+                        score=0.0,
+                        trajectory=(
+                            self._create_failed_trajectory(
+                                sample_id, f"Sample {sample_id} not found"
+                            )
+                            if capture_traces
+                            else None
+                        ),
+                    )
+                    continue
+
+                completion = eval_sample.output.completion
+                sample_scores: dict[str, inspect_ai.scorer.Score] = (
+                    eval_sample.scores or {}
+                )
+                score = self.score_aggregator(sample_scores)
+
+                output = InspectOutput(completion=completion, scores=sample_scores)
+
+                trajectory: InspectTrajectory | None = None
+                if capture_traces:
+                    target = original_sample.target
+                    input_text = self._format_input(original_sample.input)
+                    feedback = self.feedback_generator(
+                        input_text, completion, target, sample_scores, score
+                    )
+                    trajectory = InspectTrajectory(
+                        sample_id=sample_id,
+                        input=original_sample.input,
+                        target=target,
+                        messages=(
+                            list(eval_sample.messages) if eval_sample.messages else []
+                        ),
+                        completion=completion,
+                        scores=sample_scores,
+                        score=score,
+                        feedback=feedback,
+                    )
+
                 all_results[(sample_id, epoch_idx)] = _SampleResult(
-                    output=InspectOutput(
-                        completion="",
-                        scores={},
-                        error=f"Sample {sample_id} not found in index",
-                    ),
-                    score=0.0,
-                    trajectory=(
-                        self._create_failed_trajectory(
-                            sample_id, f"Sample {sample_id} not found"
-                        )
-                        if capture_traces
-                        else None
-                    ),
+                    output=output, score=score, trajectory=trajectory
                 )
-                continue
-
-            completion = scoring.get_completion_from_sample(eval_sample)
-            sample_scores: dict[str, inspect_ai.scorer.Score] = eval_sample.scores or {}
-            score = self.score_aggregator(sample_scores)
-
-            output = InspectOutput(completion=completion, scores=sample_scores)
-
-            trajectory: InspectTrajectory | None = None
-            if capture_traces:
-                target = original_sample.target
-                input_text = self._format_input(original_sample.input)
-                feedback = self.feedback_generator(
-                    input_text, completion, target, sample_scores, score
-                )
-                trajectory = InspectTrajectory(
-                    sample_id=sample_id,
-                    input=original_sample.input,
-                    target=target,
-                    messages=(
-                        list(eval_sample.messages) if eval_sample.messages else []
-                    ),
-                    completion=completion,
-                    scores=sample_scores,
-                    score=score,
-                    feedback=feedback,
-                )
-
-            all_results[(sample_id, epoch_idx)] = _SampleResult(
-                output=output, score=score, trajectory=trajectory
-            )
 
     def _build_batch_from_results(
         self,
