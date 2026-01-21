@@ -127,7 +127,7 @@ def run_inspect_eval(
     if model_roles:
         eval_kwargs["model_roles"] = model_roles
 
-    return inspect_ai.eval(task, solver, **eval_kwargs)
+    return inspect_ai.eval(tasks=task, solver=solver, **eval_kwargs)
 
 
 def first_scorer_as_float(scores: dict[str, inspect_ai.scorer.Score]) -> float:
