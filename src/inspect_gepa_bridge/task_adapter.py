@@ -12,7 +12,7 @@ import inspect_ai.model
 import inspect_ai.scorer
 from gepa.core.adapter import EvaluationBatch
 from inspect_ai.model import ChatMessageSystem
-from inspect_ai.solver import Generate, Solver, TaskState
+from inspect_ai.solver import Generate, Solver, TaskState, solver
 
 from inspect_gepa_bridge import scoring
 from inspect_gepa_bridge.types import (
@@ -24,6 +24,7 @@ from inspect_gepa_bridge.types import (
 )
 
 
+@solver
 def set_system_message(solver: Solver, system_message: str) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         # set_system_message wraps generate because, if solver is actually a chain of solvers,
