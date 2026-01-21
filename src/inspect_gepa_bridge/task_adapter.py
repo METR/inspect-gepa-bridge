@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import gepa.core.adapter
 import inspect_ai
 import inspect_ai.dataset
 import inspect_ai.model
@@ -44,13 +45,10 @@ class _SampleResult:
     trajectory: InspectTrajectory | None
 
 
-class TaskAdapter:
+class TaskAdapter(
+    gepa.core.adapter.GEPAAdapter[SampleId, InspectTrajectory, InspectOutput]
+):
     """Wraps an Inspect AI Task for GEPA optimization."""
-
-    # Tell GEPA to use its default instruction proposal mechanism.
-    # GEPA's reflective mutation checks this attribute; if None, it uses its
-    # built-in proposal logic. Without this attribute, hasattr() fails.
-    propose_new_texts = None
 
     def __init__(
         self,
