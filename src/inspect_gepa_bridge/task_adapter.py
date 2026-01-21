@@ -1,9 +1,4 @@
-"""
-TaskAdapter for wrapping existing Inspect AI tasks with GEPA optimization.
-
-This module provides a simpler adapter that wraps an existing Inspect Task
-directly, without requiring users to implement abstract methods.
-"""
+"""TaskAdapter for wrapping existing Inspect AI tasks with GEPA optimization."""
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -25,7 +20,6 @@ from inspect_gepa_bridge.types import (
     InspectTrajectory,
     SampleId,
     ScoreAggregator,
-    format_target,
 )
 
 
@@ -51,23 +45,7 @@ class _SampleResult:
 
 
 class TaskAdapter:
-    """
-    Adapter that wraps an existing Inspect AI Task for GEPA optimization.
-
-    This adapter takes a complete Inspect Task (with dataset, solver, scorer)
-    and makes it compatible with GEPA's optimization interface. The key
-    simplification is that users don't need to implement any abstract methods;
-    instead, customization is done through optional constructor parameters.
-
-    Usage:
-        task = Task(
-            dataset=hf_dataset("gsm8k", split="train[:100]"),
-            solver=generate(),
-            scorer=model_graded_fact(),
-        )
-        adapter = TaskAdapter(task=task, model="anthropic/claude-sonnet-4-20250514")
-        dataset = adapter.get_sample_ids()
-    """
+    """Wraps an Inspect AI Task for GEPA optimization."""
 
     # Tell GEPA to use its default instruction proposal mechanism.
     # GEPA's reflective mutation checks this attribute; if None, it uses its
@@ -112,13 +90,7 @@ class TaskAdapter:
         candidate: dict[str, str],
         capture_traces: bool = False,
     ) -> EvaluationBatch[InspectTrajectory, InspectOutput]:
-        """Run evaluation on a batch of sample IDs using Inspect AI.
-
-        Handles duplicate sample IDs by running multiple Inspect AI evals with
-        epochs. For example, batch [1, 2, 1, 2, 1] runs:
-        - Eval with [1, 2], epochs=2 (covers 2 of each)
-        - Eval with [1], epochs=1 (covers remaining 1)
-        """
+        """Handles duplicate sample IDs by running multiple evals with epochs."""
         system_prompt = candidate.get("system_prompt", "")
 
         remaining: dict[SampleId, int] = {}
@@ -397,15 +369,11 @@ class TaskAdapter:
                 if isinstance(traj.input, str)
                 else self._format_input(traj.input)
             )
-            target_text = format_target(traj.target)
 
             example: dict[str, Any] = {
                 "Inputs": input_text,
                 "Generated Outputs": traj.completion,
                 "Feedback": traj.feedback,
-                "target": target_text,
-                "score": traj.score,
-                "scores": {k: str(v.value) for k, v in traj.scores.items()},
             }
             examples.append(example)
 

@@ -2,13 +2,12 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import inspect_ai
 import inspect_ai.dataset
 import inspect_ai.model
 import inspect_ai.scorer
 import inspect_ai.solver
+import pytest
 from gepa.core.adapter import EvaluationBatch
 
 from inspect_gepa_bridge import TaskAdapter
@@ -388,13 +387,9 @@ def test_make_reflective_dataset() -> None:
 
     assert "system_prompt" in result
     assert len(result["system_prompt"]) == 1
-    # GEPA recommended schema keys
     assert result["system_prompt"][0]["Inputs"] == "2+2=?"
     assert result["system_prompt"][0]["Generated Outputs"] == "4"
     assert result["system_prompt"][0]["Feedback"] == "Correct!"
-    # Additional keys
-    assert result["system_prompt"][0]["target"] == "4"
-    assert result["system_prompt"][0]["score"] == 1.0
 
 
 def test_make_reflective_dataset_no_trajectories() -> None:
@@ -467,34 +462,41 @@ def test_custom_feedback_generator() -> None:
     assert adapter.feedback_generator is custom_feedback
 
 
-def test_first_scorer_as_float_empty_scores():
-    assert first_scorer_as_float({}) == 0.0
+@pytest.mark.parametrize(
+    ("scores", "expected"),
+    [
+        ({}, 0.0),
+        (
+            {
+                "scorer1": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT),
+                "scorer2": inspect_ai.scorer.Score(value=inspect_ai.scorer.INCORRECT),
+            },
+            1.0,
+        ),
+    ],
+)
+def test_first_scorer_as_float(
+    scores: dict[str, inspect_ai.scorer.Score], expected: float
+):
+    assert first_scorer_as_float(scores) == expected
 
 
-def test_first_scorer_as_float_with_scores():
-    scores = {
-        "scorer1": inspect_ai.scorer.Score(value=inspect_ai.scorer.CORRECT),
-        "scorer2": inspect_ai.scorer.Score(value=inspect_ai.scorer.INCORRECT),
-    }
-    assert first_scorer_as_float(scores) == 1.0
-
-
-def test_format_input_string():
-    samples = [inspect_ai.dataset.Sample(input="test input", target="result", id="s1")]
-    dataset = inspect_ai.dataset.MemoryDataset(samples)
-    task = inspect_ai.Task(
-        dataset=dataset,
-        solver=inspect_ai.solver.generate(),
-        scorer=inspect_ai.scorer.match(),
-    )
-    adapter = TaskAdapter(task=task, model="test-model")
-
-    result = adapter._format_input("test input")
-
-    assert result == "test input"
-
-
-def test_format_input_chat_messages():
+@pytest.mark.parametrize(
+    ("input_data", "expected"),
+    [
+        ("test input", "test input"),
+        (
+            [
+                inspect_ai.model.ChatMessageUser(content="Hello"),
+                inspect_ai.model.ChatMessageAssistant(content="Hi there"),
+            ],
+            "Hello\nHi there",
+        ),
+    ],
+)
+def test_format_input(
+    input_data: str | list[inspect_ai.model.ChatMessage], expected: str
+):
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     task = inspect_ai.Task(
@@ -504,14 +506,7 @@ def test_format_input_chat_messages():
     )
     adapter = TaskAdapter(task=task, model="test-model")
 
-    messages: list[inspect_ai.model.ChatMessage] = [
-        inspect_ai.model.ChatMessageUser(content="Hello"),
-        inspect_ai.model.ChatMessageAssistant(content="Hi there"),
-    ]
-
-    result = adapter._format_input(messages)
-
-    assert result == "Hello\nHi there"
+    assert adapter._format_input(input_data) == expected
 
 
 @pytest.mark.asyncio
