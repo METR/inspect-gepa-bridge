@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING, Any, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import inspect_ai
 import inspect_ai.dataset
+import inspect_ai.log
 import inspect_ai.model
 import inspect_ai.scorer
 import inspect_ai.solver
@@ -15,6 +17,9 @@ from inspect_gepa_bridge import TaskAdapter
 from inspect_gepa_bridge.scoring import first_scorer_as_float
 from inspect_gepa_bridge.task_adapter import set_system_message
 from inspect_gepa_bridge.types import InspectOutput, InspectTrajectory
+
+if TYPE_CHECKING:
+    from pytest_mock import MockerFixture
 
 
 def test_task_adapter_init_builds_sample_index():
@@ -192,8 +197,7 @@ def test_evaluate_all_same_id_uses_epochs(mock_eval: MagicMock) -> None:
     assert len(list(eval_task.dataset)) == 1
 
 
-@patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
-def test_evaluate_mixed_duplicates_uses_multiple_evals(mock_eval: MagicMock) -> None:
+def test_evaluate_mixed_duplicates_uses_multiple_evals(mocker: MockerFixture) -> None:
     """Batch [s1, s2, s1] runs 2 evals."""
     samples = [
         inspect_ai.dataset.Sample(input="2+2=?", target="4", id="s1"),
@@ -230,7 +234,22 @@ def test_evaluate_mixed_duplicates_uses_multiple_evals(mock_eval: MagicMock) -> 
         make_mock_sample("s1", "4-second"),
     ]
 
-    mock_eval.side_effect = [[mock_log1], [mock_log2]]
+    # This is more complicated than checking mock_eval.call_args, but necessary because
+    # evaluate mutates task.dataset.
+    expected_dataset_lengths = iter([2, 1])
+    mock_eval_return_values = iter([[mock_log1], [mock_log2]])
+
+    def mock_eval_side_effect(
+        task: inspect_ai.Task, *args: Any, **kwargs: Any
+    ) -> Sequence[inspect_ai.log.EvalLog]:
+        assert len(list(task.dataset)) == next(expected_dataset_lengths)
+
+        return next(mock_eval_return_values)
+
+    mock_eval = mocker.patch(
+        "inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval",
+        side_effect=mock_eval_side_effect,
+    )
 
     result = adapter.evaluate(
         batch=["s1", "s2", "s1"],
@@ -244,12 +263,8 @@ def test_evaluate_mixed_duplicates_uses_multiple_evals(mock_eval: MagicMock) -> 
     assert result.outputs[1].completion == "6-first"
     assert result.outputs[2].completion == "4-second"
     assert mock_eval.call_count == 2
-    first_call = mock_eval.call_args_list[0]
-    assert first_call.kwargs["epochs"] == 1
-    assert len(list(first_call.kwargs["task"].dataset)) == 2
-    second_call = mock_eval.call_args_list[1]
-    assert second_call.kwargs["epochs"] == 1
-    assert len(list(second_call.kwargs["task"].dataset)) == 1
+    for call in mock_eval.call_args_list:
+        assert call.kwargs["epochs"] == 1
 
 
 @patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
