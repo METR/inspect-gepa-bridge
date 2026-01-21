@@ -1,6 +1,6 @@
-"""Tests for TaskAdapter."""
+from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import inspect_ai
 import inspect_ai.dataset
@@ -50,7 +50,8 @@ def test_task_adapter_assigns_sequential_ids_when_missing():
     assert adapter.get_sample_ids() == [0, 1]
 
 
-def test_create_eval_task_sets_system_message():
+@pytest.mark.asyncio
+async def test_create_eval_task_sets_system_message():
     samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
     dataset = inspect_ai.dataset.MemoryDataset(samples)
     original_solver = inspect_ai.solver.generate()
@@ -66,6 +67,25 @@ def test_create_eval_task_sets_system_message():
     assert eval_task.solver is not None
     assert eval_task.dataset is not None
     assert len(list(eval_task.dataset)) == 1
+
+    state = inspect_ai.solver.TaskState(
+        model=inspect_ai.model.ModelName("openai/test-model"),
+        sample_id="s1",
+        epoch=0,
+        input="test",
+        target=inspect_ai.scorer.Target("result"),
+        messages=[],
+    )
+    generate = AsyncMock(spec=inspect_ai.solver.Generate)
+
+    await eval_task.solver(state, generate)
+
+    generate.assert_called_once()
+    task_state = generate.call_args.args[0]
+    assert isinstance(task_state, inspect_ai.solver.TaskState)
+
+    print(task_state.messages)
+    raise Exception("Stop here")
 
 
 def test_create_eval_task_with_solver_list():
