@@ -140,13 +140,13 @@ class TaskAdapter(
         original_solver = self.task.solver
         if isinstance(original_solver, list):
             solver_chain: list[inspect_ai.solver.Solver] = [
-                set_system_message(template=system_prompt),
                 *original_solver,
+                set_system_message(template=system_prompt),
             ]
         else:
             solver_chain = [
-                set_system_message(template=system_prompt),
                 original_solver,
+                set_system_message(template=system_prompt),
             ]
 
         return inspect_ai.Task(
