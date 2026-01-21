@@ -12,6 +12,7 @@ import inspect_ai
 import inspect_ai.log
 import inspect_ai.model
 import inspect_ai.scorer
+import inspect_ai.solver
 
 from inspect_gepa_bridge.types import format_target
 
@@ -96,6 +97,7 @@ def score_to_float(score: inspect_ai.scorer.Score | None) -> float:
 
 def run_inspect_eval(
     task: inspect_ai.Task,
+    solver: inspect_ai.solver.Solver,
     model: str | inspect_ai.model.Model,
     log_dir: str | None = None,
     model_roles: dict[str, inspect_ai.model.Model] | None = None,
@@ -125,7 +127,7 @@ def run_inspect_eval(
     if model_roles:
         eval_kwargs["model_roles"] = model_roles
 
-    return inspect_ai.eval(task, **eval_kwargs)
+    return inspect_ai.eval(task, solver, **eval_kwargs)
 
 
 def first_scorer_as_float(scores: dict[str, inspect_ai.scorer.Score]) -> float:

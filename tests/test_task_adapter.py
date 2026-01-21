@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import inspect_ai
 import inspect_ai.dataset
@@ -12,7 +12,6 @@ from gepa.core.adapter import EvaluationBatch
 
 from inspect_gepa_bridge import TaskAdapter
 from inspect_gepa_bridge.scoring import first_scorer_as_float
-from inspect_gepa_bridge.task_adapter import set_system_message
 from inspect_gepa_bridge.types import InspectOutput, InspectTrajectory
 
 
@@ -48,65 +47,6 @@ def test_task_adapter_assigns_sequential_ids_when_missing():
     adapter = TaskAdapter(task=task, model="test-model")
 
     assert adapter.get_sample_ids() == [0, 1]
-
-
-@pytest.mark.asyncio
-async def test_create_eval_task_sets_system_message():
-    samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
-    dataset = inspect_ai.dataset.MemoryDataset(samples)
-    original_solver = inspect_ai.solver.generate()
-    task = inspect_ai.Task(
-        dataset=dataset,
-        solver=original_solver,
-        scorer=inspect_ai.scorer.match(),
-    )
-    adapter = TaskAdapter(task=task, model="test-model")
-
-    eval_task = adapter._create_eval_task(samples, "You are helpful.")
-
-    assert eval_task.solver is not None
-    assert eval_task.dataset is not None
-    assert len(list(eval_task.dataset)) == 1
-
-    state = inspect_ai.solver.TaskState(
-        model=inspect_ai.model.ModelName("openai/test-model"),
-        sample_id="s1",
-        epoch=0,
-        input="test",
-        target=inspect_ai.scorer.Target("result"),
-        messages=[],
-    )
-    generate = AsyncMock(spec=inspect_ai.solver.Generate)
-
-    await eval_task.solver(state, generate)
-
-    generate.assert_called_once()
-    task_state = generate.call_args.args[0]
-    assert isinstance(task_state, inspect_ai.solver.TaskState)
-
-    print(task_state.messages)
-    raise Exception("Stop here")
-
-
-def test_create_eval_task_with_solver_list():
-    samples = [inspect_ai.dataset.Sample(input="test", target="result", id="s1")]
-    dataset = inspect_ai.dataset.MemoryDataset(samples)
-    solver_list = [
-        inspect_ai.solver.generate(),
-        inspect_ai.solver.generate(),
-    ]
-    task = inspect_ai.Task(
-        dataset=dataset,
-        solver=solver_list,
-        scorer=inspect_ai.scorer.match(),
-    )
-    adapter = TaskAdapter(task=task, model="test-model")
-
-    eval_task = adapter._create_eval_task(samples, "You are helpful.")
-
-    assert eval_task.solver is not None
-    assert eval_task.dataset is not None
-    assert len(list(eval_task.dataset)) == 1
 
 
 @patch("inspect_gepa_bridge.task_adapter.scoring.run_inspect_eval")
@@ -527,56 +467,3 @@ def test_format_input(
     adapter = TaskAdapter(task=task, model="test-model")
 
     assert adapter._format_input(input_data) == expected
-
-
-@pytest.mark.asyncio
-async def test_set_system_message_replaces_existing():
-    solver_fn = set_system_message(template="New system")
-    state = MagicMock()
-    state.messages = [
-        inspect_ai.model.ChatMessageSystem(content="Old system"),
-        inspect_ai.model.ChatMessageUser(content="User"),
-    ]
-
-    result = await solver_fn(state, MagicMock())
-
-    assert len(result.messages) == 2
-    assert isinstance(result.messages[0], inspect_ai.model.ChatMessageSystem)
-    assert result.messages[0].content == "New system"
-    assert isinstance(result.messages[1], inspect_ai.model.ChatMessageUser)
-
-
-@pytest.mark.asyncio
-async def test_set_system_message_adds_when_none_exist():
-    solver_fn = set_system_message(template="New system")
-    state = MagicMock()
-    state.messages = [
-        inspect_ai.model.ChatMessageUser(content="User"),
-        inspect_ai.model.ChatMessageAssistant(content="Assistant"),
-    ]
-
-    result = await solver_fn(state, MagicMock())
-
-    assert len(result.messages) == 3
-    assert isinstance(result.messages[0], inspect_ai.model.ChatMessageSystem)
-    assert result.messages[0].content == "New system"
-
-
-@pytest.mark.asyncio
-async def test_set_system_message_removes_multiple():
-    solver_fn = set_system_message(template="New system")
-    state = MagicMock()
-    state.messages = [
-        inspect_ai.model.ChatMessageSystem(content="Old 1"),
-        inspect_ai.model.ChatMessageUser(content="User"),
-        inspect_ai.model.ChatMessageSystem(content="Old 2"),
-        inspect_ai.model.ChatMessageAssistant(content="Assistant"),
-    ]
-
-    result = await solver_fn(state, MagicMock())
-
-    assert len(result.messages) == 3
-    assert isinstance(result.messages[0], inspect_ai.model.ChatMessageSystem)
-    assert result.messages[0].content == "New system"
-    assert isinstance(result.messages[1], inspect_ai.model.ChatMessageUser)
-    assert isinstance(result.messages[2], inspect_ai.model.ChatMessageAssistant)

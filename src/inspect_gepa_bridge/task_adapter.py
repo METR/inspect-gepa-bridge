@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, Unpack
 
 import gepa.core.adapter
 import inspect_ai
@@ -10,10 +10,9 @@ import inspect_ai.dataset
 import inspect_ai.log
 import inspect_ai.model
 import inspect_ai.scorer
-import inspect_ai.solver
 from gepa.core.adapter import EvaluationBatch
 from inspect_ai.model import ChatMessageSystem
-from inspect_ai.solver import Generate, Solver, TaskState, solver
+from inspect_ai.solver import Generate, Solver, TaskState
 
 from inspect_gepa_bridge import scoring
 from inspect_gepa_bridge.types import (
@@ -25,16 +24,26 @@ from inspect_gepa_bridge.types import (
 )
 
 
-@solver
-def set_system_message(template: str) -> Solver:
-    """Replace (not prepend) all system messages with a single new one."""
-
+def set_system_message(solver: Solver, system_message: str) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
-        state.messages = [
-            msg for msg in state.messages if not isinstance(msg, ChatMessageSystem)
-        ]
-        state.messages.insert(0, ChatMessageSystem(content=template))
-        return state
+        # set_system_message wraps generate because, if solver is actually a chain of solvers,
+        # it's hard to know which solver will call generate. If we wrap generate, we can be sure
+        # that the system message will be correct no matter where generate is called.
+        async def wrapped_generate(
+            state: TaskState,
+            tool_calls: Literal["loop", "single", "none"] = "loop",
+            **kwargs: Unpack[inspect_ai.model.GenerateConfigArgs],
+        ) -> TaskState:
+            state.messages = [
+                message
+                for message in state.messages
+                if not isinstance(message, ChatMessageSystem)
+            ]
+            state.messages.insert(0, ChatMessageSystem(content=system_message))
+
+            return await generate(state, tool_calls, **kwargs)
+
+        return await solver(state, wrapped_generate)
 
     return solve
 
@@ -108,10 +117,13 @@ class TaskAdapter(
             sample_ids_to_eval = [sid for sid, count in remaining.items() if count > 0]
             samples_to_eval = [self._sample_index[sid] for sid in sample_ids_to_eval]
             epochs = min(remaining[sid] for sid in sample_ids_to_eval)
+            task = inspect_ai.task_with(  # type: ignore[reportUnknownReturnType]
+                self.task, dataset=inspect_ai.dataset.MemoryDataset(samples_to_eval)
+            )
 
-            eval_task = self._create_eval_task(samples_to_eval, system_prompt)
             results = scoring.run_inspect_eval(
-                task=eval_task,
+                task=task,
+                solver=set_system_message(self.task.solver, system_prompt),
                 model=self.model,
                 log_dir=self.log_dir,
                 model_roles=model_roles_resolved,
@@ -131,31 +143,6 @@ class TaskAdapter(
                 remaining[sid] -= epochs
 
         return self._build_batch_from_results(batch, all_results, capture_traces)
-
-    def _create_eval_task(
-        self,
-        samples: list[inspect_ai.dataset.Sample],
-        system_prompt: str,
-    ) -> inspect_ai.Task:
-        original_solver = self.task.solver
-        if isinstance(original_solver, list):
-            solver_chain: list[inspect_ai.solver.Solver] = [
-                *original_solver,
-                set_system_message(template=system_prompt),
-            ]
-        else:
-            solver_chain = [
-                original_solver,
-                set_system_message(template=system_prompt),
-            ]
-
-        return inspect_ai.Task(
-            dataset=inspect_ai.dataset.MemoryDataset(samples),
-            solver=solver_chain,
-            scorer=self.task.scorer,
-            sandbox=self.task.sandbox,
-            message_limit=self.task.message_limit,
-        )
 
     def _resolve_model_roles(self) -> dict[str, inspect_ai.model.Model] | None:
         if not self.model_roles:
