@@ -64,12 +64,12 @@ class TaskAdapter(
     def __init__(
         self,
         task: inspect_ai.Task,
-        model: str,
+        model: str | inspect_ai.model.Model,
         *,
         score_aggregator: ScoreAggregator | None = None,
         feedback_generator: FeedbackGenerator | None = None,
         log_dir: str | None = None,
-        model_roles: dict[str, str] | None = None,
+        model_roles: dict[str, str | inspect_ai.model.Model] | None = None,
     ):
         self.task = task
         self.model = model
